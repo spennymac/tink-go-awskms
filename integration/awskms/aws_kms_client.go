@@ -27,7 +27,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
 	kmsv2 "github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -59,6 +58,7 @@ type V2KMS interface {
 type awsClient struct {
 	keyURIPrefix          string
 	kms                   kmsiface.KMSAPI
+	timeout               time.Duration
 	encryptionContextName EncryptionContextName
 	builder               func(keyURI string, encContextName EncryptionContextName) (tink.AEAD, error)
 }
@@ -70,13 +70,6 @@ type ClientOption interface{ set(*awsClient) error }
 type option func(*awsClient) error
 
 func (o option) set(a *awsClient) error { return o(a) }
-
-// V2ClientOption is an interface for defining options that are passed to [WithV2KMSOptions].
-type V2ClientOption interface{ set(*v2Client) error }
-
-type v2option func(*v2Client) error
-
-func (o v2option) set(a *v2Client) error { return o(a) }
 
 // WithCredentialPath instantiates the underlying AWS KMS client using the
 // credentials located at credentialPath.
@@ -169,64 +162,31 @@ func WithEncryptionContextName(name EncryptionContextName) ClientOption {
 	})
 }
 
-func WithV2KMS(kms V2KMS) V2ClientOption {
-	return v2option(func(v *v2Client) error {
-		if v.kms != nil {
-			return errors.New("V2KMS client already set")
+func WithV2KMS(kms V2KMS) ClientOption {
+	return option(func(a *awsClient) error {
+		if a.builder != nil {
+			return errors.New("WithV2KMS option cannot be used, KMS client already set")
 		}
 
-		v.kms = kms
-
-		return nil
-	})
-}
-
-func WithV2KMSOptions(opts ...V2ClientOption) ClientOption {
-	return option(func(a *awsClient) error {
 		var v v2Client
+		v.kms = kms
 		a.builder = v.BuildAead
 
-		for _, opt := range opts {
-			if err := opt.set(&v); err != nil {
-				return fmt.Errorf("failed setting option: %v", err)
-			}
-		}
-
 		return nil
 	})
 }
 
-// WithAPITimeout sets the timeout for API requests made by the KMS client.
-func WithAPITimeout(timeout time.Duration) V2ClientOption {
-	return v2option(func(v *v2Client) error {
-		if v.timeout != 0 {
+// WithAPITimeout sets the timeout for API requests made by the KMS client. Only valid for the V2 client.
+func WithAPITimeout(timeout time.Duration) ClientOption {
+	return option(func(a *awsClient) error {
+		if a.kms != nil {
+			return errors.New("WithAPITimeout option cannot be used, only valid when using a V2 KMS client")
+		}
+
+		if a.timeout != 0 {
 			return errors.New("timeout already set")
 		}
-		v.timeout = timeout
-
-		return nil
-	})
-}
-
-// WithLoadOptions sets the load options used to create the AWS SDK config.
-func WithLoadOptions(opts ...func(*config.LoadOptions) error) V2ClientOption {
-	return v2option(func(v *v2Client) error {
-		if len(v.loadOpts) > 0 {
-			return errors.New("load options already set")
-		}
-		v.loadOpts = opts
-
-		return nil
-	})
-}
-
-// WithKMSOptions sets the options used to create the AWS SDK KMS client.
-func WithKMSOptions(opts ...func(options *kmsv2.Options)) V2ClientOption {
-	return v2option(func(v *v2Client) error {
-		if len(v.kmsOpts) > 0 {
-			return errors.New("KMS options already set")
-		}
-		v.kmsOpts = opts
+		a.timeout = timeout
 
 		return nil
 	})
@@ -473,32 +433,13 @@ func getRegion(keyURI string) (string, error) {
 }
 
 type v2Client struct {
-	kms      V2KMS
-	kmsOpts  []func(options *kmsv2.Options)
-	loadOpts []func(*config.LoadOptions) error
-	timeout  time.Duration
+	kms     V2KMS
+	timeout time.Duration
 }
 
 func (v *v2Client) BuildAead(keyURI string, encContextName EncryptionContextName) (tink.AEAD, error) {
 	if v.timeout == 0 {
 		v.timeout = defaultTimeout
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), v.timeout)
-	defer cancel()
-
-	if v.kms == nil {
-		cfg, err := config.LoadDefaultConfig(ctx, v.loadOpts...)
-		if err != nil {
-			return nil, fmt.Errorf("loading AWS default config: %w", err)
-		}
-
-		kmsClient, err := kmsv2.NewFromConfig(cfg, v.kmsOpts...), nil
-		if err != nil {
-			return nil, fmt.Errorf("creating V2KMS client: %w", err)
-
-		}
-		v.kms = kmsClient
 	}
 
 	return newAWSV2AEAD(keyURI, v.kms, encContextName, v.timeout), nil

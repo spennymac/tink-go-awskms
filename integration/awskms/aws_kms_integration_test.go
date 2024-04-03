@@ -18,14 +18,17 @@ package awskms_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	// Placeholder for internal flag import.
 	// context is used to cancel outstanding requests
+	kmsv2 "github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/tink-crypto/tink-go/v2/aead"
 	"github.com/tink-crypto/tink-go/v2/core/registry"
 	"github.com/tink-crypto/tink-go/v2/tink"
@@ -227,8 +230,20 @@ func TestKMSEnvelopeAEADEncryptAndDecrypt(t *testing.T) {
 				if err != nil {
 					t.Skip(err)
 				}
-				client, err := awskms.NewClientWithOptions(keyURI,
-					awskms.WithV2KMSOptions(awskms.WithLoadOptions(config.WithSharedCredentialsFiles([]string{credFilePath}))))
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+				defer cancel()
+
+				cfg, err := config.LoadDefaultConfig(ctx, config.WithSharedCredentialsFiles([]string{credFilePath}))
+				if err != nil {
+					t.Errorf("loading AWS config: %v", err)
+				}
+
+				kmsClient, err := kmsv2.NewFromConfig(cfg), nil
+				if err != nil {
+					t.Errorf("creating kms client: %v", err)
+				}
+
+				client, err := awskms.NewClientWithOptions(keyURI, awskms.WithV2KMS(kmsClient))
 				if err != nil {
 					t.Fatalf("awskms.NewClientWithOptions() err = %q, want nil", err)
 				}
@@ -239,7 +254,6 @@ func TestKMSEnvelopeAEADEncryptAndDecrypt(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-
 			client := test.clientFn(t)
 			kekAEAD, err := client.GetAEAD(keyURI)
 			if err != nil {

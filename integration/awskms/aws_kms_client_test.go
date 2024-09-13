@@ -25,8 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	kmsv2 "github.com/aws/aws-sdk-go-v2/service/kms"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/kms"
 	"github.com/tink-crypto/tink-go-awskms/v2/integration/awskms/internal/fakeawskms"
@@ -442,7 +440,7 @@ func TestGetAEADEncryptDecryptWithV2(t *testing.T) {
 		t.Fatalf("fakekms.NewV2() failed: %v", err)
 	}
 
-	client, err := NewClientWithOptions("aws-kms://", WithV2KMSOptions(WithV2KMS(fakekms)))
+	client, err := NewClientWithOptions("aws-kms://", WithV2KMS(fakekms))
 	if err != nil {
 		t.Fatalf("NewClientWithOptions() failed: %v", err)
 	}
@@ -481,37 +479,37 @@ func encryptAndDecrypt(t *testing.T, aead tink.AEAD, plaintext []byte, aad []byt
 	}
 }
 
-func TestNewClientWithOptions_V2Options(t *testing.T) {
+func TestNewClientWithOptions_WithV2KMS(t *testing.T) {
 	keyURI := "aws-kms://arn:aws:kms:us-east-2:235739564943:key/3ee50705-5a82-4f5b-9753-05c4f473922f"
 	keyARN := strings.TrimPrefix(keyURI, awsPrefix)
-	fakekms, err := fakeawskms.NewV2([]string{keyARN})
+	fakev2kms, err := fakeawskms.NewV2([]string{keyARN})
 	if err != nil {
 		t.Fatalf("fakekms.NewV2() failed: %v", err)
 	}
 
+	fakev1kms, err := fakeawskms.New([]string{keyARN})
+	if err != nil {
+		t.Fatalf("fakekms.New() failed: %v", err)
+	}
+
 	tests := []struct {
 		name        string
-		opts        []V2ClientOption
+		opts        []ClientOption
 		expectedErr bool
 	}{
 		{
 			name:        "kms already set",
-			opts:        []V2ClientOption{WithV2KMS(fakekms), WithV2KMS(fakekms)},
+			opts:        []ClientOption{WithKMS(fakev1kms), WithV2KMS(fakev2kms)},
 			expectedErr: true,
 		},
 		{
 			name:        "timeout already set",
-			opts:        []V2ClientOption{WithAPITimeout(time.Second * 10), WithAPITimeout(time.Second * 10)},
+			opts:        []ClientOption{WithAPITimeout(time.Second * 10), WithAPITimeout(time.Second * 10)},
 			expectedErr: true,
 		},
 		{
-			name:        "loadOpts already set",
-			opts:        []V2ClientOption{WithLoadOptions(config.WithRegion("us-east-2")), WithLoadOptions(config.WithRegion("us-east-2"))},
-			expectedErr: true,
-		},
-		{
-			name:        "kmsOpts already set",
-			opts:        []V2ClientOption{WithKMSOptions(kmsv2.WithAPIOptions()), WithKMSOptions(kmsv2.WithAPIOptions())},
+			name:        "timeout cant be set with v1 client",
+			opts:        []ClientOption{WithKMS(fakev1kms), WithAPITimeout(time.Second * 10)},
 			expectedErr: true,
 		},
 	}
@@ -519,7 +517,7 @@ func TestNewClientWithOptions_V2Options(t *testing.T) {
 	for _, test := range tests {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
-			_, err := NewClientWithOptions("aws-kms://", WithV2KMSOptions(test.opts...))
+			_, err := NewClientWithOptions("aws-kms://", test.opts...)
 			if test.expectedErr && err == nil {
 				t.Fatalf("NewClientWithOptions() failed: %v", err)
 			}
